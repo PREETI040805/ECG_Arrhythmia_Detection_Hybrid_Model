@@ -1,300 +1,588 @@
-# ECG Arrhythmia Detection Using Fourier Transform and Hybrid CNN-ViT Model
+# ECG Arrhythmia Detection Using Hybrid Deep Learning
 
-A deep learning pipeline for automated classification of ECG heartbeats using a hybrid architecture that combines **time-domain** and **frequency-domain (FFT)** features with a **CNN-Vision Transformer (ViT)** model.
+A deep learning framework for automated ECG arrhythmia classification using **time-domain ECG morphology, frequency-domain Fourier features, CNNs, Transformers, and Vision Transformers (ViT)**.
 
-Supports both **5-class AAMI classification** (N, S, V, F, Q) and **binary classification** (Normal vs Abnormal).
+The project evaluates four architectures under both **5-class AAMI arrhythmia classification** and **binary Normal vs Abnormal classification**, providing an ablation-style comparison of temporal and frequency-domain representations.
+
+---
 
 ## Overview
 
-This project implements and compares four progressively more complex architectures in an **ablation study** to demonstrate the contribution of each component:
+Electrocardiogram (ECG) signals contain clinically relevant information across both the **time domain** and **frequency domain**. Conventional deep learning models can capture morphological patterns in ECG waveforms, while frequency-domain representations can provide complementary information about signal characteristics.
 
-| Model | Description |
-|-------|-------------|
-| **Baseline CNN** | Residual 1D-CNN on time-domain signal only |
-| **CNN + Transformer** | Residual CNN followed by Transformer encoder |
-| **Fourier Hybrid** | Dual-branch (time + FFT) CNN with shared Transformer fusion |
-| **Fourier ViT Hybrid** | Dual-branch CNN with genuine ViT backbone ([CLS] token, CLS-based classification) |
+This project investigates whether combining these representations with modern deep learning architectures improves automated arrhythmia classification.
 
-The Fourier ViT Hybrid model processes ECG beats through two parallel CNN branches — one for the raw time-domain waveform and one for the log-magnitude FFT spectrum — then fuses them via a ViT-style encoder with a learnable [CLS] token, positional embeddings, and classification from the [CLS] output.
+### Models evaluated
 
-## Architecture (Fourier ViT Hybrid)
+1. **Baseline CNN** — time-domain ECG only
+2. **CNN + Transformer** — time-domain ECG with self-attention
+3. **Fourier + CNN + Transformer** — time-domain + frequency-domain features
+4. **Fourier + CNN-ViT Hybrid** — time-domain + frequency-domain features with a Vision Transformer backbone
 
+The framework supports:
+
+* 5-class AAMI arrhythmia classification
+* Binary Normal vs Abnormal classification
+* Fourier/FFT feature extraction
+* CNN-based temporal feature learning
+* Transformer-based attention
+* Vision Transformer-based feature learning
+* Class-weighted training
+* Early stopping and learning-rate scheduling
+* Classification reports
+* Model comparison tables
+* Performance visualizations
+* Bootstrap confidence intervals
+* Saliency/interpretability analysis
+
+---
+
+## Project Architecture
+
+```text
+                         ECG Beat
+                            │
+                            ▼
+                   ┌─────────────────┐
+                   │ Preprocessing   │
+                   │ & Normalization │
+                   └────────┬────────┘
+                            │
+                 ┌──────────┴──────────┐
+                 │                     │
+                 ▼                     ▼
+          Time-Domain ECG        FFT / Fourier
+                 │                 Features
+                 │                     │
+                 └──────────┬──────────┘
+                            │
+             ┌──────────────┼──────────────┐
+             │              │              │
+             ▼              ▼              ▼
+         Baseline       CNN +          Fourier +
+           CNN        Transformer    CNN + Transformer
+                                           │
+                                           ▼
+                                    Fourier + CNN-ViT
+                                           │
+                                           ▼
+                                    Classification
+                                           │
+                                           ▼
+                              Performance Evaluation
 ```
-                    ┌─────────────────┐
-                    │   ECG Beat      │
-                    │  (186 samples)  │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │                             │
-    ┌─────────▼──────────┐       ┌──────────▼─────────┐
-    │  Time-Domain CNN   │       │   FFT (rfft)       │
-    │  Branch            │       │   → Log-Magnitude  │
-    │                    │       │   → Frequency CNN   │
-    │  ResConv1D(32)     │       │   Branch            │
-    │  → MaxPool         │       │                    │
-    │  ResConv1D(64)     │       │   ResConv1D(32)    │
-    │  → MaxPool         │       │   → MaxPool        │
-    │  ResConv1D(128)    │       │   ResConv1D(64)    │
-    └─────────┬──────────┘       │   → MaxPool        │
-              │                  │   ResConv1D(128)   │
-              │                  └──────────┬─────────┘
-              │                             │
-              │  Dense(d_model)             │  Dense(d_model)
-              └──────────────┬──────────────┘
-                             │ Concatenate (seq axis)
-                    ┌────────▼────────┐
-                    │  [CLS] Token    │  ← learnable ViT-style
-                    │  (prepended)    │     class token
-                    ├─────────────────┤
-                    │  Positional     │
-                    │  Encoding       │
-                    │  (learnable)    │
-                    ├─────────────────┤
-                    │  ViT Encoder ×2 │
-                    │  (Pre-Norm,     │
-                    │   4 heads)      │
-                    ├─────────────────┤
-                    │  LayerNorm      │
-                    │  → Extract      │
-                    │    [CLS] output │  ← classify from
-                    ├─────────────────┤     CLS token only
-                    │  Dense(128)     │
-                    │  → Dropout      │
-                    │  → Dense(64)    │
-                    │  → Softmax(C)   │  C = 5 or 2
-                    └─────────────────┘
-```
 
-### Why This Is a Genuine ViT (Not Just a Transformer)
-
-A standard Transformer Encoder applied to features is common. What makes our architecture a **ViT-style** model:
-
-1. **Patch-like representation**: CNN feature maps serve as "patches" — analogous to ViT's linear projection of image patches (Dosovitskiy et al., 2020), adapted for 1D signals
-2. **Learnable [CLS] token**: A dedicated classification token is prepended to the sequence — the model learns to aggregate global information into it via self-attention
-3. **Classification from [CLS] only**: The final prediction uses only the [CLS] token's output (`x[:, 0, :]`), not pooling over the full sequence — this is the defining characteristic of ViT
-
-### Other Key Design Decisions
-
-- **Pre-norm Transformer** (LayerNorm before attention/FFN) for more stable training
-- **Residual CNN blocks** with BatchNormalization and GELU activation
-- **Focal Loss** (gamma=1.0) with capped per-class alpha weights (max 5.0) to handle severe class imbalance
-- **Label smoothing** (0.05) for regularization
-- **No data leakage**: StandardScaler fit on training set only; no threshold tuning on test data
-- **Fourier Hybrid** (Model 3) uses Attention-weighted pooling instead of [CLS] for comparison
+---
 
 ## Dataset
 
-**ECG Heartbeat Categorization Dataset** — derived from the MIT-BIH Arrhythmia Database (PhysioNet).
+The pipeline is designed for the **MIT-BIH Arrhythmia / ECG Heartbeat Categorization data used by the project**.
 
-| Property | Value |
-|----------|-------|
-| Source | MIT-BIH Arrhythmia Database (48 records) |
-| Preprocessing | Kachuee et al. (2018) methodology |
-| Sampling rate | 125 Hz (resampled from 360 Hz) |
-| Beat length | 186 samples per beat |
-| Total beats | ~109,000 |
-| Train/Test split | DS1/DS2 (AAMI-recommended patient-level split) |
+The processed heartbeat dataset contains:
 
-### 5-Class AAMI Classification
+* **59,782 training samples**
+* **49,712 test samples**
+* **186 signal samples per heartbeat**
+* Sampling rate: **125 Hz**
 
-| Label | AAMI | Description | Train % |
-|-------|------|-------------|---------|
-| 0 | N | Normal beat | ~78% |
-| 1 | S | Supraventricular ectopic | ~1.6% |
-| 2 | V | Ventricular ectopic | ~6.7% |
-| 3 | F | Fusion beat | ~0.7% |
-| 4 | Q | Unknown/Paced beat | ~13% |
+The 5-class classification task follows the AAMI-style grouping used by the project:
 
-> **Note on class imbalance**: Normal beats dominate the dataset. We address this with focal loss (alpha-weighted) rather than oversampling to avoid introducing synthetic artifacts.
+| Label | Class            |
+| ----- | ---------------- |
+| N     | Normal           |
+| S     | Supraventricular |
+| V     | Ventricular      |
+| F     | Fusion           |
+| Q     | Unknown          |
 
-## Project Structure
+For binary classification:
 
-```
-ecg-arrhythmia-hybrid/
-├── data/
-│   ├── README.md              # Dataset download instructions
-│   ├── mitbih_train.csv       # Training data (not tracked in git)
-│   └── mitbih_test.csv        # Test data (not tracked in git)
-├── src/
-│   ├── __init__.py
-│   ├── utils.py               # Configuration, seed management, callbacks
-│   ├── preprocessing.py       # Data loading, normalization, validation
-│   ├── fft_features.py        # FFT computation and normalization
-│   ├── models.py              # All four model architectures
-│   ├── train.py               # Training loop with focal loss
-│   └── evaluate.py            # Metrics, plots, bootstrap CI, saliency
-├── scripts/
-│   └── build_dataset.py       # Build dataset from raw MIT-BIH files
-├── notebooks/
-│   └── ECG_Arrhythmia_Hybrid_Model.ipynb
-├── models/                    # Saved checkpoints (not tracked)
-├── results/
-│   ├── figures/               # All visualization plots
-│   └── metrics/               # CSV metrics and reports
-├── run_pipeline.py            # Main entry point
-├── requirements.txt
-├── .gitignore
-└── README.md
+* **Normal** → Normal
+* **S, V, F, Q** → Abnormal
+
+### Dataset location
+
+Place the processed files in:
+
+```text
+data/
+├── mitbih_train.csv
+└── mitbih_test.csv
 ```
 
-## Installation
+The dataset files are intentionally treated as input data rather than generated by the model-training code.
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/ecg-arrhythmia-hybrid.git
-cd ecg-arrhythmia-hybrid
-
-# Create virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Requirements
-
-- Python 3.8+
-- TensorFlow 2.10+
-- NumPy, Pandas, SciPy
-- scikit-learn
-- Matplotlib, Seaborn
-
-## Usage
-
-### Option 1: Download Kaggle Dataset
-
-1. Download from [Kaggle](https://www.kaggle.com/datasets/shayanfazeli/heartbeat)
-2. Place `mitbih_train.csv` and `mitbih_test.csv` in `data/`
-
-### Option 2: Build from Raw MIT-BIH Files
-
-```bash
-python scripts/build_dataset.py \
-    --raw_dir "path/to/raw/mitbih/files" \
-    --out_dir data/
-```
-
-### Run Training
-
-```bash
-# Full pipeline — 5-class AAMI (train all 4 models + evaluate)
-python run_pipeline.py --epochs 30 --batch_size 256
-
-# Binary classification (Normal vs Abnormal)
-python run_pipeline.py --binary --epochs 30 --batch_size 256
-
-# Both modes (5-class + binary) — full ablation
-python run_pipeline.py --both --epochs 30 --batch_size 256
-
-# Custom settings
-python run_pipeline.py --data_dir data --epochs 30 --batch_size 256 --seed 42
-```
-
-### Output
-
-All results are saved to `results/`:
-
-- `results/figures/` — confusion matrices, ROC curves, PR curves, training history, saliency maps, model comparison charts, bootstrap CI plots
-- `results/metrics/` — CSV metrics, classification reports
+---
 
 ## Methodology
 
-### Preprocessing
+### 1. ECG preprocessing
 
-1. **Baseline wander removal**: Per-beat median subtraction
-2. **Normalization**: StandardScaler (fit on training data only — no data leakage)
-3. **Stratified split**: 80% train / 20% validation (from training set)
-4. **FFT features**: Real FFT → log-magnitude spectrum → standardized
+Each ECG heartbeat undergoes preprocessing before model training.
 
-### Training
+The pipeline includes:
 
-- **Optimizer**: Adam (lr=1e-3) with ReduceLROnPlateau
-- **Loss**: Focal Loss (gamma=1.0) with capped per-class alpha weights (max 5.0)
-- **Regularization**: L2 weight decay, dropout (0.3), label smoothing (0.05)
-- **Early stopping**: patience=10 on validation loss, restoring best weights
-- **Reproducibility**: Fixed seeds (Python, NumPy, TensorFlow)
+* Signal validation
+* NaN/constant-signal checking
+* Baseline-wander correction
+* Stratified train/validation splitting
+* Training-set-only normalization
+* Class-weight calculation
+* Reshaping into CNN-compatible input tensors
 
-### Evaluation
+Each beat contains **186 time-domain samples**.
 
-- Per-class precision, recall, F1-score
-- Macro and weighted averages
-- ROC-AUC (one-vs-rest)
-- Bootstrap confidence intervals (1000 iterations, 95% CI)
-- Gradient-based saliency maps for interpretability
+---
 
-## Ablation Study Design
+### 2. Fourier feature extraction
 
-Each model is trained from scratch with the **same**:
-- Data splits (identical train/val/test)
-- Random seed (reset before each model)
-- Preprocessing pipeline
-- Loss function and optimizer
-- Callbacks and hyperparameters
+The project computes the Fast Fourier Transform (FFT) of ECG signals to obtain frequency-domain representations.
 
-This ensures differences in performance are attributable to architectural changes, not random variation.
+The frequency-domain branch provides complementary information to the original ECG waveform.
 
-### Dual-Task Evaluation
+The configured representation uses:
 
-The pipeline supports two classification tasks:
-- **5-class AAMI** (N, S, V, F, Q) — the harder, clinically rigorous task with patient-level DS1/DS2 split
-- **Binary** (Normal vs Abnormal) — the easier task that yields higher accuracy (~97%) but less diagnostic detail
+```text
+FFT bins = 93
+```
 
-Both tasks are evaluated with the same ablation study design, allowing direct comparison of how each architectural component contributes under different classification difficulties.
+The resulting features are integrated with the deep learning architectures in the Fourier-based models.
 
-## Results
+---
 
-All metrics below were generated by actual model training and evaluation — no fabricated numbers. Results are updated after each training run.
+## Model Architectures
 
-### 5-Class AAMI Classification (Test Set)
+### Baseline CNN
 
-| Model | Accuracy | Weighted F1 | Macro F1 | ROC-AUC (Weighted) |
-|-------|----------|-------------|----------|---------------------|
-| Baseline CNN | 77.14% | 0.8152 | 0.3453 | 0.8706 |
-| CNN + Transformer | **82.09%** | **0.8460** | **0.3219** | 0.7940 |
-| Fourier Hybrid | 63.75% | 0.7210 | 0.2726 | 0.7722 |
-| **Fourier ViT Hybrid** | 71.20% | 0.7683 | 0.2690 | 0.7985 |
+The baseline establishes performance using only the ECG waveform.
 
-### Binary Classification — Normal vs Abnormal (Test Set)
+```text
+ECG
+ ↓
+1D Convolution
+ ↓
+1D Convolution
+ ↓
+1D Convolution
+ ↓
+Dense Layers
+ ↓
+Classification
+```
 
-| Model | Accuracy | Weighted F1 | Macro F1 |
-|-------|----------|-------------|----------|
-| Baseline CNN | 72.31% | 0.7737 | 0.6053 |
-| CNN + Transformer | 73.13% | 0.7808 | 0.6242 |
-| Fourier Hybrid | **75.31%** | **0.7964** | **0.6278** |
-| **Fourier ViT Hybrid** | 74.00% | 0.7845 | 0.5978 |
+Configured convolutional filters:
 
-### Key Findings
+```text
+32 → 64 → 128
+```
 
-1. **Severe patient-level generalization gap**: Validation accuracy (~98%) drops dramatically to ~71–82% on the test set. This is expected with the AAMI-recommended DS1/DS2 patient-level split — training and test sets come from entirely different patients. This is a well-known and well-documented challenge in the ECG classification literature.
-2. **CNN + Transformer leads in 5-class**: The CNN + Transformer achieves the highest 5-class test accuracy (82.09%) and weighted F1 (0.846), suggesting that Transformer self-attention over time-domain CNN features is effective for capturing inter-beat morphological patterns.
-3. **Fourier features help in binary mode**: In binary classification, the Fourier Hybrid achieves the best accuracy (75.31%) and weighted F1 (0.796), outperforming time-domain-only models. This suggests frequency-domain features provide complementary discriminative power when the task is simplified to Normal vs Abnormal.
-4. **ViT [CLS] token architecture works but needs more data/epochs**: The Fourier ViT Hybrid performs competitively (71.20% 5-class, 74.00% binary) but the genuine ViT-style [CLS] classification mechanism may require more training epochs or data to surpass pooling-based approaches, especially with the limited training set (~48K beats) and CPU-only training (20 epochs).
-5. **Low macro F1 reflects extreme class imbalance**: All models achieve low macro F1 (0.27–0.35) because minority classes (S: 1.6%, F: 0.7%, Q: 7 test samples) are extremely hard to classify correctly with patient-level splitting. Weighted F1 (0.72–0.85) better reflects overall performance.
-6. **Ablation validates each component**: The progressive architecture comparison (CNN → CNN+Transformer → Fourier Hybrid → Fourier ViT Hybrid) demonstrates the contribution of each component under controlled conditions (same data, seeds, loss, and hyperparameters).
+This model serves as the primary baseline for comparison.
 
-> **Note on dataset**: This project uses the Kaggle ECG Heartbeat Categorization Dataset (Kachuee et al., 2018). The `scripts/build_dataset.py` can alternatively build from raw MIT-BIH files; results may differ slightly.
+---
 
-## References
+### CNN + Transformer
 
-1. M. Kachuee, S. Fazeli, and M. Sarrafzadeh, "ECG Heartbeat Classification: A Deep Transferable Representation," *2018 IEEE International Conference on Healthcare Informatics (ICHI)*, 2018.
+This architecture combines local convolutional feature extraction with Transformer self-attention.
 
-2. T. Lin, P. Goyal, R. Girshick, K. He, and P. Dollár, "Focal Loss for Dense Object Detection," *IEEE Transactions on Pattern Analysis and Machine Intelligence*, vol. 42, no. 2, pp. 318-327, 2020.
+```text
+ECG
+ ↓
+CNN Feature Extraction
+ ↓
+Transformer Encoder
+ ↓
+Dense Classification Head
+ ↓
+Output
+```
 
-3. A. Vaswani et al., "Attention Is All You Need," *Advances in Neural Information Processing Systems*, 2017.
+The Transformer configuration uses:
 
-4. A. Dosovitskiy et al., "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale," *ICLR*, 2021.
+* 4 attention heads
+* Head size: 32
+* Feed-forward dimension: 128
+* 2 Transformer layers
 
-5. G. B. Moody and R. G. Mark, "The Impact of the MIT-BIH Arrhythmia Database," *IEEE Engineering in Medicine and Biology Magazine*, vol. 20, no. 3, pp. 45-50, 2001.
+This architecture allows the model to capture longer-range dependencies within the ECG sequence.
 
-## License
+---
 
-This project is for academic and research purposes. The MIT-BIH Arrhythmia Database is available from PhysioNet under the Open Data Commons Attribution License.
+### Fourier + CNN + Transformer
 
-## Authors
+This model introduces frequency-domain information into the CNN-Transformer architecture.
 
-**Group 4 — Fast & Fouriers**  
-D Y Patil International University  
-Mentor: Dr. Prabir Kumar Das
+```text
+                 ┌── Time-domain ECG ──→ CNN ──┐
+ECG ─────────────┤                              ├→ Transformer
+                 └── FFT features ─────────────┘
+                                                │
+                                                ▼
+                                          Classification
+```
+
+This architecture tests whether combining temporal morphology with spectral information improves classification.
+
+---
+
+### Fourier + CNN-ViT Hybrid
+
+The fourth architecture combines Fourier features with a CNN-ViT-based representation.
+
+```text
+ECG
+ │
+ ├── Time-domain representation
+ │
+ └── Fourier representation
+          │
+          ▼
+      CNN + ViT
+          │
+          ▼
+    Classification
+```
+
+The model evaluates whether a Vision Transformer-style attention mechanism can exploit the combined representations.
+
+---
+
+# Experimental Results
+
+## 5-Class AAMI Classification
+
+The following results are obtained from the project's test-set model comparison.
+
+| Model                       |   Accuracy | Macro F1 | Weighted F1 | Macro ROC-AUC | Weighted ROC-AUC |
+| --------------------------- | ---------: | -------: | ----------: | ------------: | ---------------: |
+| Baseline CNN                |     77.14% |   34.53% |      81.52% |        77.96% |           87.06% |
+| CNN + Transformer           | **82.09%** |   32.19% |  **84.59%** |        72.08% |           79.40% |
+| Fourier + CNN + Transformer |     63.75% |   27.26% |      72.10% |        72.43% |           77.22% |
+| Fourier + CNN-ViT Hybrid    |     71.20% |   26.90% |      76.83% |        56.06% |           79.85% |
+
+### Interpretation
+
+For the 5-class task, the **CNN + Transformer** experiment achieved the highest:
+
+* Accuracy: **82.09%**
+* Weighted F1: **84.59%**
+
+The results also demonstrate that adding frequency-domain information did not consistently improve performance in the tested architectures.
+
+Because the dataset is imbalanced, both macro-averaged and weighted metrics are reported rather than relying on accuracy alone.
+
+---
+
+## Binary Normal vs Abnormal Classification
+
+| Model                       |   Accuracy | Macro Precision | Macro Recall |   Macro F1 | Weighted F1 |
+| --------------------------- | ---------: | --------------: | -----------: | ---------: | ----------: |
+| Baseline CNN                |     72.31% |          61.22% |       75.93% |     60.53% |      77.37% |
+| CNN + Transformer           |     73.13% |          63.00% |   **80.53%** |     62.42% |      78.08% |
+| Fourier + CNN + Transformer | **75.31%** |          62.25% |       76.84% | **62.78%** |  **79.64%** |
+| Fourier + CNN-ViT Hybrid    |     74.00% |          59.67% |       70.61% |     59.78% |      78.45% |
+
+For binary classification, the **Fourier + CNN + Transformer** experiment achieved:
+
+* Accuracy: **75.31%**
+* Macro F1: **62.78%**
+* Weighted F1: **79.64%**
+
+The CNN + Transformer produced the highest macro recall at **80.53%**.
+
+---
+
+# Ablation Study
+
+The four architectures allow comparison of different representation and modeling strategies.
+
+| Experiment                  | Time Domain | Fourier Features | Transformer | ViT |
+| --------------------------- | :---------: | :--------------: | :---------: | :-: |
+| Baseline CNN                |      ✓      |         —        |      —      |  —  |
+| CNN + Transformer           |      ✓      |         —        |      ✓      |  —  |
+| Fourier + CNN + Transformer |      ✓      |         ✓        |      ✓      |  —  |
+| Fourier + CNN-ViT Hybrid    |      ✓      |         ✓        |      —      |  ✓  |
+
+This design makes it possible to examine the contribution of:
+
+* CNN-based feature extraction
+* Transformer attention
+* Fourier-domain representations
+* Vision Transformer architectures
+
+The experimental results show that increased architectural complexity does not automatically translate into higher classification performance.
+
+---
+
+# Evaluation Metrics
+
+The project reports multiple metrics to provide a more complete assessment of classification performance.
+
+### Accuracy
+
+Overall proportion of correctly classified samples.
+
+### Precision
+
+Measures the proportion of predicted samples belonging to a class that are actually members of that class.
+
+### Recall
+
+Measures the proportion of samples belonging to a class that are correctly identified.
+
+### F1 Score
+
+Harmonic mean of precision and recall.
+
+Both **macro** and **weighted** versions are reported.
+
+### ROC-AUC
+
+Measures discrimination performance using receiver operating characteristic curves.
+
+For the multiclass task, both macro and weighted ROC-AUC are reported.
+
+---
+
+# Repository Structure
+
+```text
+ECG_Arrhythmia_Detection_Hybrid_Model/
+│
+├── data/
+│   ├── mitbih_train.csv
+│   ├── mitbih_test.csv
+│   └── README.md
+│
+├── models/
+│   └── .gitkeep
+│
+├── notebooks/
+│   └── ECG_Arrhythmia_Hybrid_Model.ipynb
+│
+├── results/
+│   ├── 5class/
+│   │   ├── figures/
+│   │   └── metrics/
+│   │       ├── metrics.csv
+│   │       ├── model_comparison.csv
+│   │       └── classification_reports/
+│   │
+│   ├── binary/
+│   │   ├── figures/
+│   │   └── metrics/
+│   │       ├── metrics.csv
+│   │       ├── model_comparison.csv
+│   │       └── classification_reports/
+│   │
+│   └── figures/
+│
+├── scripts/
+│   └── build_dataset.py
+│
+├── src/
+│   ├── __init__.py
+│   ├── evaluate.py
+│   ├── fft_features.py
+│   ├── models.py
+│   ├── preprocessing.py
+│   ├── train.py
+│   └── utils.py
+│
+├── run_pipeline.py
+├── run_training.py
+├── requirements.txt
+├── LICENSE
+├── PPT_Consistency_Analysis.md
+└── README.md
+```
+
+---
+
+# Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/PREETI040805/ECG_Arrhythmia_Detection_Hybrid_Model.git
+cd ECG_Arrhythmia_Detection_Hybrid_Model
+```
+
+Create a virtual environment:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+# Running the Pipeline
+
+## 5-Class Classification
+
+Run the complete pipeline:
+
+```bash
+python run_pipeline.py
+```
+
+You can specify the number of epochs and batch size:
+
+```bash
+python run_pipeline.py --epochs 50 --batch_size 128
+```
+
+---
+
+## Binary Classification
+
+Run Normal vs Abnormal classification:
+
+```bash
+python run_pipeline.py --binary
+```
+
+---
+
+## Run Both Tasks
+
+```bash
+python run_pipeline.py --both
+```
+
+The pipeline generates model metrics, comparison tables, plots, confidence intervals, and interpretability outputs under:
+
+```text
+results/
+```
+
+---
+
+# Training
+
+An additional training script optimized for CPU execution is provided:
+
+```bash
+python run_training.py
+```
+
+The main pipeline provides the more comprehensive four-model experimental setup, while `run_training.py` provides a streamlined training and evaluation workflow.
+
+---
+
+# Reproducibility
+
+The project uses a fixed random seed:
+
+```text
+42
+```
+
+Key configured parameters include:
+
+| Parameter               |  Value |
+| ----------------------- | -----: |
+| Sampling rate           | 125 Hz |
+| Signal length           |    186 |
+| FFT bins                |     93 |
+| Batch size              |    128 |
+| Maximum epochs          |     50 |
+| Learning rate           |  0.001 |
+| Validation split        |    20% |
+| Dropout                 |    0.3 |
+| Early stopping patience |     10 |
+| LR reduction patience   |      4 |
+
+---
+
+# Results Directory
+
+Generated outputs include:
+
+```text
+results/
+├── 5class/
+│   ├── figures/
+│   └── metrics/
+│
+└── binary/
+    ├── figures/
+    └── metrics/
+```
+
+The metrics directory contains model comparison tables and classification reports that can be used to reproduce the reported performance comparisons.
+
+---
+
+# Key Findings
+
+The experiments demonstrate several task-dependent observations:
+
+1. **CNN + Transformer achieved 82.09% accuracy for 5-class classification.**
+2. **CNN + Transformer achieved the highest weighted F1 for the 5-class task at 84.59%.**
+3. **Fourier + CNN + Transformer achieved 75.31% binary classification accuracy.**
+4. The Fourier + CNN + Transformer model also achieved the highest binary weighted F1 (**79.64%**).
+5. Adding Fourier features did not consistently improve performance across all architectures, highlighting the importance of evaluating architectural complexity empirically rather than assuming that additional representations will always improve classification.
+
+---
+
+# Limitations
+
+Several limitations should be considered when interpreting these results:
+
+* Performance depends on the underlying dataset and preprocessing pipeline.
+* The heartbeat dataset is class-imbalanced, making macro-level metrics particularly important.
+* The reported results are based on the specific architectures and hyperparameters implemented in this repository.
+* Frequency-domain features did not consistently improve performance across the evaluated architectures.
+* The system is a research/experimental classification framework and is **not intended for clinical diagnosis or direct medical decision-making**.
+
+---
+
+# Future Work
+
+Potential extensions include:
+
+* Hyperparameter optimization
+* More extensive cross-validation
+* Patient-level rather than beat-level evaluation
+* Advanced ECG augmentation
+* Additional time-frequency representations
+* Wavelet-based features
+* Multi-scale CNN architectures
+* Attention visualization and explainability
+* Calibration and uncertainty estimation
+* External-dataset validation
+* Lightweight deployment for real-time ECG monitoring
+
+---
+
+# Technologies
+
+The project is implemented using:
+
+* Python
+* TensorFlow / Keras
+* NumPy
+* Pandas
+* SciPy
+* Scikit-learn
+* Matplotlib
+* Seaborn
+
+---
+
+# License
+
+See [`LICENSE`](LICENSE) for the licensing information associated with this repository.
+
+---
+
+## Disclaimer
+
+This repository is intended for **research and educational purposes**. The models and predictions should not be used as a substitute for professional medical diagnosis or clinical decision-making.
