@@ -1,0 +1,10 @@
+Model: Fourier + CNN + Transformer
+
+              precision    recall  f1-score   support
+
+      Normal       0.97      0.75      0.84     44259
+    Abnormal       0.28      0.79      0.41      5453
+
+    accuracy                           0.75     49712
+   macro avg       0.62      0.77      0.63     49712
+weighted avg       0.89      0.75      0.80     49712

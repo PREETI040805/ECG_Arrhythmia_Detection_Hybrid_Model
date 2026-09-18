@@ -1,0 +1,10 @@
+Model: Baseline CNN
+
+              precision    recall  f1-score   support
+
+      Normal       0.97      0.71      0.82     44259
+    Abnormal       0.26      0.81      0.39      5453
+
+    accuracy                           0.72     49712
+   macro avg       0.61      0.76      0.61     49712
+weighted avg       0.89      0.72      0.77     49712

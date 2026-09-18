@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment/secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+
+# Large/generated files
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.onnx
+
+# Data
+data/
+datasets/
+
+# Model/output directories
+outputs/
+runs/
+checkpoints/

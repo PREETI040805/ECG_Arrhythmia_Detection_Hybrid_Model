@@ -1,0 +1,13 @@
+Model: Baseline CNN
+
+                  precision    recall  f1-score   support
+
+          Normal       0.96      0.75      0.84     44259
+Supraventricular       0.09      0.18      0.12      1837
+     Ventricular       0.40      0.90      0.55      3221
+          Fusion       0.09      0.71      0.17       388
+         Unknown       0.00      0.14      0.00         7
+
+        accuracy                           0.74     49712
+       macro avg       0.31      0.54      0.34     49712
+    weighted avg       0.88      0.74      0.79     49712

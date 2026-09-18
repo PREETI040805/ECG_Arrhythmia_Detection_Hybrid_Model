@@ -1,0 +1,13 @@
+Model: CNN + Transformer
+
+                  precision    recall  f1-score   support
+
+          Normal       0.95      0.86      0.90     44259
+Supraventricular       0.06      0.06      0.06      1837
+     Ventricular       0.51      0.84      0.64      3221
+          Fusion       0.01      0.02      0.01       388
+         Unknown       0.00      0.00      0.00         7
+
+        accuracy                           0.82     49712
+       macro avg       0.31      0.36      0.32     49712
+    weighted avg       0.88      0.82      0.85     49712
