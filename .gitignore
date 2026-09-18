@@ -48,3 +48,8 @@ datasets/
 outputs/
 runs/
 checkpoints/
+data/*.csv
+
+# ECG datasets
+Training MIT dataset*/
+arrhythmia/
